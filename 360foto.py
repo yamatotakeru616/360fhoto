@@ -116,7 +116,19 @@ def process_video():
                     f'roll={transform[2]}'
                 ])
 
-                command = f'ffmpeg -i "{input_path}" -vf v360={v360_options} -q 1 -r {fps} "{output_file_path}"'
+                # GPU acceleration with CUDA (適応的に使用)
+                # 大きな解像度の動画の場合、CPUデコード→GPU処理を使用
+                cap = cv2.VideoCapture(input_path)
+                video_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+                cap.release()
+                
+                if video_width > 4096:
+                    # 大きな解像度：CPUデコード、GPUエンコード（利用可能な場合）
+                    command = f'ffmpeg -i "{input_path}" -vf v360={v360_options} -c:v mjpeg -q 1 -r {fps} "{output_file_path}"'
+                else:
+                    # 小さな解像度：CUDAアクセラレーション
+                    command = f'ffmpeg -hwaccel cuda -hwaccel_output_format cuda -i "{input_path}" -vf v360={v360_options},hwdownload,format=nv12 -q 1 -r {fps} "{output_file_path}"'
+                
                 process = subprocess.Popen(command, shell=True)
 
                 while process.poll() is None:

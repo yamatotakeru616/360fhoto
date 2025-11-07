@@ -1,4 +1,5 @@
 
 # Required for 360foto.py
 psutil
-opencv-python
+opencv-python-headless
+numpy
