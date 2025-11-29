@@ -1,0 +1,9 @@
+<x:xmpmeta xmlns:x="adobe:ns:meta/">
+ <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+  <rdf:Description rdf:about=""
+    xmlns:xcr="http://www.capturingreality.com/ns/xcr/1.1#">
+   <xcr:Position>0 0 0</xcr:Position>
+   <xcr:Rotation>1.000000000 0.000000000 0.000000000 0.000000000 0.707106781 0.707106781 0.000000000 -0.707106781 0.707106781</xcr:Rotation>
+  </rdf:Description>
+ </rdf:RDF>
+</x:xmpmeta>
