@@ -1,5 +1,7 @@
 
 import os
+    Thread(target=process_video).start()
+import os
 import platform
 import subprocess
 import tkinter as tk
@@ -12,6 +14,7 @@ import time
 import queue
 from datetime import datetime, timedelta
 import shutil
+import numpy as np
 
 # If running in a headless Unix-like environment (not Windows), exit with an informative message
 if platform.system() != 'Windows' and os.environ.get('DISPLAY','') == '' and os.environ.get('CI','') == '':
@@ -52,9 +55,13 @@ def update_total_frames():
     num_directions = 1 if direction_var.get() == "1" else (12 if direction_var.get() == "12" else (8 if direction_var.get() == "8" else (8 if direction_var.get() == "8_20" else (6 if direction_var.get() == "6_h3_45" else (9 if direction_var.get() == "9_h3_45x2" else (5 if direction_var.get() == "5_down" else (4 if direction_var.get() == "4_h1_45" else 2)))))))
 
     for file in input_files_var.get().split(';'):
+        if not file:
+            continue
         cap = cv2.VideoCapture(file)
         if cap.isOpened():
             fps = cap.get(cv2.CAP_PROP_FPS)
+            if fps <= 0:
+                fps = 30
             duration = cap.get(cv2.CAP_PROP_FRAME_COUNT) / fps
             frames_for_file = int(duration / frame_rate * num_directions)
             total_frames += frames_for_file
@@ -66,10 +73,10 @@ def process_video():
     global processing, start_time
     processing = True
     status_var.set("処理中...")
-    input_paths = input_files_var.get().split(';')
+    input_paths = [p for p in input_files_var.get().split(';') if p]
     output_path = output_folder_var.get()
     size = 1600  # 画素数を1600x1600に固定
-    format = format_var.get()
+    fmt = format_var.get()
     total_frames = total_frames_var.get()
     processed_frames = 0
     start_time = time.time()
@@ -105,7 +112,7 @@ def process_video():
 
                 base_name = os.path.basename(input_path)
                 name_part = base_name[-7:-4]
-                output_file_path = os.path.join(output_path, f'{name_part}_ot_{index}_%04d.{format}')
+                output_file_path = os.path.join(output_path, f'{name_part}_ot_{index}_%04d.{fmt}')
 
                 v360_options = ':'.join([
                     'input=e', 'output=rectilinear',
@@ -128,19 +135,22 @@ def process_video():
                 else:
                     # 小さな解像度：CUDAアクセラレーション
                     command = f'ffmpeg -hwaccel cuda -hwaccel_output_format cuda -i "{input_path}" -vf v360={v360_options},hwdownload,format=nv12 -q 1 -r {fps} "{output_file_path}"'
-                
+
                 process = subprocess.Popen(command, shell=True)
 
                 while process.poll() is None:
                     time.sleep(0.1)
-                    output_files = [f for f in os.listdir(output_path) if f.endswith(f'.{format}')]
+                    output_files = [f for f in os.listdir(output_path) if f.endswith(f'.{fmt}')]
                     processed_frames = len(output_files)
-                    progress = (processed_frames / total_frames) * 100
+                    if total_frames > 0:
+                        progress = (processed_frames / total_frames) * 100
+                    else:
+                        progress = 0
                     update_queue.put(('progress', progress))
                     update_queue.put(('frames', processed_frames))
 
                     elapsed_time = time.time() - start_time
-                    if processed_frames > 0:
+                    if processed_frames > 0 and total_frames > 0:
                         estimated_total_time = (elapsed_time / processed_frames) * total_frames
                         estimated_remaining_time = estimated_total_time - elapsed_time
                         estimated_completion_time = datetime.now() + timedelta(seconds=estimated_remaining_time)
@@ -149,6 +159,13 @@ def process_video():
                 
                 process.wait()
                 
+                # Optional XMP write if enabled
+                if xmp_var.get():
+                    try:
+                        write_xmp(output_file_path, transform[0], transform[1], transform[2])
+                    except Exception:
+                        pass
+
                 if not processing:
                     kill_ffmpeg_process()
                     break
@@ -245,6 +262,56 @@ def get_transforms():
     else:
         return []
 
+def get_rotation_matrix(yaw_deg, pitch_deg, roll_deg):
+    # Convert to radians
+    yaw = np.radians(yaw_deg)
+    pitch = np.radians(pitch_deg)
+    roll = np.radians(roll_deg)
+
+    # Rotation matrices (assumptions may need adjustment depending on v360 conventions)
+    Ry = np.array([
+        [np.cos(yaw), 0, np.sin(yaw)],
+        [0, 1, 0],
+        [-np.sin(yaw), 0, np.cos(yaw)]
+    ])
+
+    Rx = np.array([
+        [1, 0, 0],
+        [0, np.cos(pitch), -np.sin(pitch)],
+        [0, np.sin(pitch), np.cos(pitch)]
+    ])
+
+    Rz = np.array([
+        [np.cos(roll), -np.sin(roll), 0],
+        [np.sin(roll), np.cos(roll), 0],
+        [0, 0, 1]
+    ])
+
+    R = Ry @ Rx @ Rz
+    return R
+
+def write_xmp(output_path, yaw, pitch, roll):
+    try:
+        R = get_rotation_matrix(yaw, pitch, roll)
+        R_flat = R.flatten()
+        rotation_str = " ".join([f"{x:.9f}" for x in R_flat])
+
+        xmp_content = f"""<x:xmpmeta xmlns:x="adobe:ns:meta/">
+ <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+  <rdf:Description rdf:about=""
+    xmlns:xcr="http://www.capturingreality.com/ns/xcr/1.1#">
+   <xcr:Position>0 0 0</xcr:Position>
+   <xcr:Rotation>{rotation_str}</xcr:Rotation>
+  </rdf:Description>
+ </rdf:RDF>
+</x:xmpmeta>"""
+
+        xmp_path = os.path.splitext(output_path)[0] + ".xmp"
+        with open(xmp_path, "w", encoding="utf-8") as f:
+            f.write(xmp_content)
+    except Exception as e:
+        print(f"Error writing XMP: {e}")
+
 def start_processing():
     global update_queue
     update_queue = queue.Queue()
@@ -289,6 +356,7 @@ output_folder_var = tk.StringVar()
 frame_rate_var = tk.DoubleVar(value=1.5)
 size_var = tk.IntVar(value=1600)
 format_var = tk.StringVar(value="jpg")
+xmp_var = tk.BooleanVar(value=False)
 status_var = tk.StringVar(value="待機中")
 total_frames_var = tk.IntVar(value=0)
 processed_frames_var = tk.IntVar(value=0)
@@ -317,6 +385,7 @@ tk.Radiobutton(app, text="3秒", variable=frame_rate_var, value=3.0, command=upd
 tk.Label(app, text="フォーマット:").grid(row=3, column=0, padx=5, pady=5, sticky="e")
 tk.Radiobutton(app, text="JPG", variable=format_var, value="jpg").grid(row=3, column=1, padx=5, pady=5, sticky="w")
 tk.Radiobutton(app, text="PNG", variable=format_var, value="png").grid(row=3, column=2, padx=5, pady=5, sticky="w")
+tk.Checkbutton(app, text="XMPデータを作成", variable=xmp_var).grid(row=3, column=3, padx=5, pady=5, sticky="w")
 
 # 方向選択ラジオボタン（更新）
 tk.Label(app, text="出力方向:").grid(row=4, column=0, padx=5, pady=5, sticky="e")
